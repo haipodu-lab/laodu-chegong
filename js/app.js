@@ -1,4 +1,6 @@
 import * as C from "./calc.js";
+import { CRAFTS, buildCraft, programFor, profilePoints, drawSegmentsSVG } from "./crafts.js";
+import { toolFace, toolIcon, toolNames } from "./tools.js";
 
 const FAV_KEY = "laodu.favorites";
 const NOTE_KEY = "laodu.notes";
@@ -6,7 +8,7 @@ const MODULES = [
   ["arc", "圆弧接点"], ["thread", "各种螺纹"], ["macro", "宏程序"], ["angle", "角度计算"],
   ["tol", "公差等级"], ["across", "对角计算"], ["weight", "材料重量"], ["gcode", "常用代码"],
   ["threads", "螺纹对照表"], ["trig", "三角函数表"], ["misc", "其他计算"], ["notes", "工艺品"],
-  ["groove", "各种槽"], ["tri", "解三角形"], ["sim", "宏转G模拟"], ["lab", "实验室"],
+  ["groove", "各种槽"], ["tri", "解三角形"], ["sim", "宏转G模拟"], ["lab", "切削参数"],
 ];
 const memory = {};
 let cutting = null;
@@ -80,6 +82,7 @@ function mineHTML() {
     <section class="card"><h2 style="margin:0 0 6px">老杜车工</h2><p class="muted">版本 1.0.0 · 网页版</p><p>给车床和数控车工用的离线计算本。不登录，不联网，没有广告。</p></section>
     <section class="card"><h2 style="margin:0 0 6px">使用前</h2><p>所有直径、牙高、公差和切削用量都是参考值。编程之前对照图纸、量具和机床说明书，首件必须实测。</p></section>
     <section class="card"><h2 style="margin:0 0 6px">收藏</h2>${list}</section>
+    <section class="card"><a class="item" href="#/mine/notes"><b>我的工艺笔记</b><div class="muted">材料、刀具和转速记在这台设备上</div></a></section>
     <section class="card"><p class="note">${esc(C.standardsSummary)}</p></section>
     <p class="note">用 Safari 打开后，点分享，再点「添加到主屏幕」，就会像一个 App 一样从桌面启动，之后可以离线使用。</p></div>`;
 }
@@ -398,22 +401,13 @@ const screens = {
     },
   },
   notes: {
-    html: () => page("notes", "工艺品", `<section class="card" id="editor">${fieldText("title", "名称")}${fieldText("material", "材料")}${fieldText("tool", "刀具")}${fieldText("cutting", "转速 / 进给")}<label class="field"><span>备注</span></label><textarea id="body" rows="4"></textarea><p><button class="btn" id="saveNote" type="button">保存</button></p></section><section class="card" id="notes"></section>`, "记在这台设备的浏览器里，不上传。"),
+    html: () => page("notes", "工艺品", `<div class="craft-grid" id="gallery"></div>`, "十种原创参数化零件。改直径或总长后，图形、关键点和程序一起变。"),
     bind() {
       bindFav("notes");
-      const render = () => {
-        const notes = loadNotes();
-        document.getElementById("notes").innerHTML = notes.length ? notes.map((note) => `<div class="item"><b>${esc(note.title || "未命名")}</b><div class="muted">${esc([note.material, note.tool, note.cutting].filter(Boolean).join(" · "))}</div><p>${esc(note.body || "")}</p><button class="btn sec" data-del="${esc(note.id)}" type="button">删除</button></div>`).join("") : `<p class="empty">还没有工艺卡片。</p>`;
-        document.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { saveNotes(loadNotes().filter((note) => note.id !== btn.dataset.del)); render(); }));
-      };
-      document.getElementById("saveNote").onclick = () => {
-        const note = { id: String(Date.now()), title: document.getElementById("title").value, material: document.getElementById("material").value, tool: document.getElementById("tool").value, cutting: document.getElementById("cutting").value, body: document.getElementById("body").value, updatedAt: new Date().toISOString() };
-        if (!note.title && !note.body) return;
-        saveNotes([note, ...loadNotes()]);
-        ["title", "material", "tool", "cutting", "body"].forEach((id) => { document.getElementById(id).value = ""; });
-        render();
-      };
-      render();
+      document.getElementById("gallery").innerHTML = CRAFTS.map((craft) => {
+        const model = buildCraft(craft.id, craft.defaults);
+        return `<a class="craft-tile" href="#/m/notes/${craft.id}">${drawSegmentsSVG(model, 180, 120)}<b>${esc(craft.name)}</b></a>`;
+      }).join("");
     },
   },
   groove: {
@@ -469,7 +463,7 @@ const screens = {
     },
   },
   lab: {
-    html: () => page("lab", "实验室", `<p class="muted" id="labstatus">正在读取用量表…</p><div id="lab"></div>`, "568 条车削和加工中心记录，来源写在每条下面。转速 n = 1000×Vc/(π×D)。铣削进给 vf = fz×z×n。球头按有效直径算转速。"),
+    html: () => page("lab", "切削参数", `<p class="muted" id="labstatus">正在读取用量表…</p><div id="lab"></div>`, "568 条车削和加工中心记录，来源写在每条下面。转速 n = 1000×Vc/(π×D)。铣削进给 vf = fz×z×n。球头按有效直径算转速。"),
     async bind() {
       bindFav("lab");
       if (!cutting) {
@@ -477,16 +471,43 @@ const screens = {
         catch { document.getElementById("labstatus").textContent = "用量表没有读出来。"; return; }
       }
       const data = cutting;
-      const tools = [...new Set(data.records.map((r) => r.toolClass))].sort();
+      const names = toolNames(data.records);
       document.getElementById("labstatus").textContent = `共 ${data.records.length} 条，数控车 ${data.records.filter((r) => r.machine === "lathe").length}，加工中心 ${data.records.filter((r) => r.machine === "mill").length}。`;
-      document.getElementById("lab").innerHTML = `<div class="seg"><button data-m="all" class="on" type="button">全部</button><button data-m="lathe" type="button">数控车</button><button data-m="mill" type="button">加工中心</button></div><input class="block" id="q" placeholder="例如 45钢、6061、304、粗车" style="width:100%;margin:8px 0"><div class="split"><label class="field"><span>材料</span><select id="mat"><option value="">全部</option>${data.materials.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select><em></em></label><label class="field"><span>工序</span><select id="op"><option value="">全部</option>${data.ops.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select><em></em></label></div><label class="field"><span>刀具类型</span><select id="tool"><option value="">全部</option>${tools.map((t) => `<option>${esc(t)}</option>`).join("")}</select><em></em></label><div class="lab-layout"><section class="card list" id="list"></section><section class="card" id="detail"></section></div>`;
-      let machine = "all", selected = null;
+      document.getElementById("lab").innerHTML = `<div class="seg"><button data-m="all" class="on" type="button">全部</button><button data-m="lathe" type="button">数控车</button><button data-m="mill" type="button">加工中心</button></div><input class="block" id="q" placeholder="例如 45钢、麻花钻、立铣刀" style="width:100%;margin:8px 0"><div class="split"><label class="field"><span>材料</span><select id="mat"><option value="">全部</option>${data.materials.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select><em></em></label><label class="field"><span>工序</span><select id="op"><option value="">全部</option>${data.ops.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select><em></em></label></div><div class="chip-row" id="tools"><button class="chip on" data-tool="" type="button">全部刀具</button>${names.map((name) => { const sample = data.records.find((row) => toolFace(row).name === name); return `<button class="chip" data-tool="${esc(name)}" type="button">${toolIcon(toolFace(sample).family)}<span>${esc(name)}</span></button>`; }).join("")}</div><section class="card" id="compare"></section><div class="lab-layout"><section class="card list" id="list"></section><section class="card" id="detail"></section></div>`;
+      let machine = "all", toolName = "", selected = null, compared = [];
       const go = () => {
-        const rows = C.filterRecords(data.records, { machine, op: document.getElementById("op").value, mat: document.getElementById("mat").value, tool: document.getElementById("tool").value, q: document.getElementById("q").value }, data.materials, data.ops);
-        document.getElementById("list").innerHTML = `<p class="muted">${rows.length} 条</p>` + rows.slice(0, 80).map((row) => `<div class="item"><button class="link" data-id="${row.id}" type="button"><b>${esc(matName(row.mat))}</b> · ${esc(opName(row.op))}<div class="muted">${esc(row.tool)}</div></button></div>`).join("");
+        const q = document.getElementById("q").value.trim().toLowerCase();
+        let rows = C.filterRecords(data.records, { machine, op: document.getElementById("op").value, mat: document.getElementById("mat").value, tool: "", q: "" }, data.materials, data.ops);
+        if (toolName) rows = rows.filter((row) => toolFace(row).name === toolName);
+        if (q) rows = rows.filter((row) => {
+          const face = toolFace(row);
+          return [matName(row.mat), opName(row.op), face.name, face.suffix, row.tool, row.notes, row.source].join(" ").toLowerCase().includes(q);
+        });
+        document.getElementById("list").innerHTML = `<p class="muted">${rows.length} 条</p>` + rows.slice(0, 80).map((row) => {
+          const face = toolFace(row);
+          return `<div class="item"><button class="link" data-id="${row.id}" type="button"><span class="tool-line">${toolIcon(face.family)}<b>${esc(face.name)}</b>${face.suffix ? `<small>${esc(face.suffix)}</small>` : ""}</span><div class="muted">${esc(matName(row.mat))} · ${esc(opName(row.op))}</div></button><button class="btn sec cmp" data-cmp="${row.id}" type="button">${compared.includes(row.id) ? "移出对比" : "加入对比"}</button></div>`;
+        }).join("");
         document.querySelectorAll("[data-id]").forEach((btn) => btn.addEventListener("click", () => { selected = data.records.find((row) => row.id === btn.dataset.id); show(); }));
-        if (!selected) selected = rows[0];
+        document.querySelectorAll("[data-cmp]").forEach((btn) => btn.addEventListener("click", () => {
+          const id = btn.dataset.cmp;
+          compared = compared.includes(id) ? compared.filter((item) => item !== id) : compared.length < 3 ? [...compared, id] : compared;
+          paintCompare();
+          go();
+        }));
+        if (!selected || !rows.some((row) => row.id === selected.id)) selected = rows[0] || null;
         show();
+        paintCompare();
+      };
+      const paintCompare = () => {
+        const rows = compared.map((id) => data.records.find((row) => row.id === id)).filter(Boolean);
+        const box = document.getElementById("compare");
+        if (!rows.length) { box.innerHTML = ""; return; }
+        box.innerHTML = `<h2 style="margin:0 0 8px">对比（最多 3 条）</h2><div class="compare">${rows.map((row) => {
+          const face = toolFace(row);
+          const vc = row.vc ? row.vc.join("–") : "—";
+          const feed = row.f ? row.f.join("–") + " mm/r" : row.fz ? row.fz.join("–") + " mm/z" : "—";
+          return `<div class="item"><span class="tool-line">${toolIcon(face.family)}<b>${esc(face.name)}</b></span>${face.suffix ? `<small class="muted">${esc(face.suffix)}</small>` : ""}<div class="muted">${esc(matName(row.mat))} · ${esc(opName(row.op))}</div><div class="rowline"><span>Vc</span><b>${esc(vc)}</b></div><div class="rowline"><span>f / fz</span><b>${esc(feed)}</b></div></div>`;
+        }).join("")}</div>`;
       };
       const matName = (id) => data.materials.find((m) => m.id === id)?.name || id;
       const opName = (id) => data.ops.find((o) => o.id === id)?.name || id;
@@ -494,7 +515,8 @@ const screens = {
         const row = selected;
         if (!row) { document.getElementById("detail").innerHTML = `<p class="empty">没有符合条件的记录。</p>`; return; }
         const vc = C.midRange(row.vc);
-        document.getElementById("detail").innerHTML = `<h2 style="margin:0 0 6px">${esc(matName(row.mat))}</h2><p>${esc(opName(row.op))} · ${esc(row.tool)}</p><div class="rowline"><span>Vc</span><b>${row.vc ? row.vc.join("–") : "—"} m/min</b></div><div class="rowline"><span>f / fz</span><b>${row.f ? row.f.join("–") + " mm/r" : row.fz ? row.fz.join("–") + " mm/z" : row.fzCode || "—"}</b></div><p class="muted">${esc(row.notes || "")}</p><p class="muted">来源：${esc(row.source)}</p>${field("dia", row.machine === "lathe" ? "工件直径" : "刀具直径", "mm", "50")}${field("vcin", "采用 Vc", "m/min", vc ?? "")}${row.feedType === "fz" ? field("teeth", "齿数 z", "", "4") : ""}${row.feedType === "pitch" ? field("pitchf", "螺距", "mm", "1.5") : ""}<div id="calc"></div>`;
+        const face = toolFace(row);
+        document.getElementById("detail").innerHTML = `<h2 style="margin:0 0 6px">${esc(matName(row.mat))}</h2><p class="tool-line">${toolIcon(face.family)}<b>${esc(face.name)}</b>${face.suffix ? `<small>${esc(face.suffix)}</small>` : ""}</p><p class="muted">${esc(opName(row.op))}</p><div class="rowline"><span>Vc</span><b>${row.vc ? row.vc.join("–") : "—"} m/min</b></div><div class="rowline"><span>f / fz</span><b>${row.f ? row.f.join("–") + " mm/r" : row.fz ? row.fz.join("–") + " mm/z" : row.fzCode || "—"}</b></div><p class="muted">${esc(row.notes || "")}</p><p class="muted">来源：${esc(row.source)}</p>${field("dia", row.machine === "lathe" ? "工件直径" : "刀具直径", "mm", "50")}${field("vcin", "采用 Vc", "m/min", vc ?? "")}${row.feedType === "fz" ? field("teeth", "齿数 z", "", "4") : ""}${row.feedType === "pitch" ? field("pitchf", "螺距", "mm", "1.5") : ""}<div id="calc"></div>`;
         const recalc = () => {
           const d = num("dia"), v = num("vcin");
           const n = C.rpm(v, d);
@@ -523,7 +545,8 @@ const screens = {
         recalc();
       };
       document.querySelectorAll("[data-m]").forEach((btn) => btn.addEventListener("click", () => { machine = btn.dataset.m; document.querySelectorAll("[data-m]").forEach((b) => b.classList.toggle("on", b === btn)); go(); }));
-      ["q", "mat", "op", "tool"].forEach((id) => document.getElementById(id).addEventListener("input", go));
+      document.querySelectorAll("[data-tool]").forEach((btn) => btn.addEventListener("click", () => { toolName = btn.dataset.tool; document.querySelectorAll("[data-tool]").forEach((b) => b.classList.toggle("on", b === btn)); go(); }));
+      ["q", "mat", "op"].forEach((id) => document.getElementById(id).addEventListener("input", go));
       go();
     },
   },
@@ -549,10 +572,69 @@ function setTab(which) {
   document.getElementById("tab-home").classList.toggle("on", which === "home");
   document.getElementById("tab-mine").classList.toggle("on", which === "mine");
 }
+const CRAFT_FIELDS = {
+  diameter: ["直径", "mm"], depth: ["铣深", "mm"], innerRatio: ["内接比", ""],
+  acrossFlats: ["对边，0 表示用直径", "mm"], sides: ["边数", ""], length: ["总长", "mm"],
+  nose: ["鼻长", "mm"], tail: ["尾锥长", "mm"], baseDiameter: ["尾端直径", "mm"],
+};
+
+function craftEditor(id) {
+  const craft = CRAFTS.find((item) => item.id === id);
+  const app = document.getElementById("app");
+  if (!craft) { app.innerHTML = homeHTML(); setTab("home"); return; }
+  const fields = Object.keys(craft.defaults).map((key) => {
+    const meta = CRAFT_FIELDS[key] || [key, ""];
+    return field(key, meta[0], meta[1], String(craft.defaults[key]));
+  }).join("");
+  app.innerHTML = page("notes", craft.name, `<p><a class="btn sec" href="#/m/notes">返回图库</a></p><div class="split"><section class="card" id="inputs">${fields}</section><section class="card" id="view"></section></div>`, "车削程序 X 为直径，Z 从前端面往卡盘为负。铣削外形在 G17，深度从上表面往下。");
+  bindFav("notes");
+  const paint = () => {
+    const params = {};
+    for (const key of Object.keys(craft.defaults)) params[key] = Number(document.getElementById(key).value);
+    const model = buildCraft(id, params);
+    const view = document.getElementById("view");
+    if (model.error) { view.innerHTML = `<p class="warn">${esc(model.error)}</p>`; return; }
+    const prog = programFor(model, params);
+    const pts = profilePoints(model);
+    const table = model.kind === "lathe"
+      ? `<table class="pts"><tr><th>X 直径</th><th>Z</th></tr>${pts.map((p) => `<tr><td>${fmt(p.x)}</td><td>${fmt(p.z)}</td></tr>`).join("")}</table>`
+      : `<table class="pts"><tr><th>X</th><th>Y</th></tr>${pts.map((p) => `<tr><td>${fmt(p.x)}</td><td>${fmt(p.y)}</td></tr>`).join("")}</table>`;
+    view.innerHTML = `${drawSegmentsSVG(model, 360, 210)}${table}<pre class="code" id="prog">${esc(prog)}</pre><button class="btn" id="copy" type="button">复制程序</button>`;
+    document.getElementById("copy").onclick = () => copyText(prog);
+  };
+  document.querySelectorAll("#inputs input").forEach((el) => el.addEventListener("input", paint));
+  paint();
+}
+
+function notesPage() {
+  return `<div class="page"><header class="page-head"><a href="#/mine" class="btn sec">返回</a><h1>我的工艺笔记</h1></header>
+    <section class="card" id="editor">${fieldText("title", "名称")}${fieldText("material", "材料")}${fieldText("tool", "刀具")}${fieldText("cutting", "转速 / 进给")}<label class="field"><span>备注</span></label><textarea id="body" rows="4"></textarea><p><button class="btn" id="saveNote" type="button">保存</button></p></section>
+    <section class="card" id="notes"></section>
+    <p class="note">记在这台设备的浏览器里，不上传。</p></div>`;
+}
+
+function bindNotes() {
+  const render = () => {
+    const notes = loadNotes();
+    document.getElementById("notes").innerHTML = notes.length ? notes.map((note) => `<div class="item"><b>${esc(note.title || "未命名")}</b><div class="muted">${esc([note.material, note.tool, note.cutting].filter(Boolean).join(" · "))}</div><p>${esc(note.body || "")}</p><button class="btn sec" data-del="${esc(note.id)}" type="button">删除</button></div>`).join("") : `<p class="empty">还没有工艺卡片。</p>`;
+    document.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { saveNotes(loadNotes().filter((note) => note.id !== btn.dataset.del)); render(); }));
+  };
+  document.getElementById("saveNote").onclick = () => {
+    const note = { id: String(Date.now()), title: document.getElementById("title").value, material: document.getElementById("material").value, tool: document.getElementById("tool").value, cutting: document.getElementById("cutting").value, body: document.getElementById("body").value, updatedAt: new Date().toISOString() };
+    if (!note.title && !note.body) return;
+    saveNotes([note, ...loadNotes()]);
+    ["title", "material", "tool", "cutting", "body"].forEach((id) => { document.getElementById(id).value = ""; });
+    render();
+  };
+  render();
+}
+
 function route() {
   const hash = (location.hash || "#/").replace(/^#/, "");
   const app = document.getElementById("app");
+  if (hash === "/mine/notes") { app.innerHTML = notesPage(); bindNotes(); setTab("mine"); return; }
   if (hash === "/mine") { app.innerHTML = mineHTML(); setTab("mine"); return; }
+  if (hash.startsWith("/m/notes/")) { craftEditor(decodeURIComponent(hash.slice("/m/notes/".length))); setTab("home"); return; }
   if (hash.startsWith("/m/")) {
     const id = hash.slice(3);
     const screen = screens[id];
