@@ -1,4 +1,4 @@
-const CACHE = "laodu-chegong-v4";
+const CACHE = "laodu-chegong-v5";
 const ASSETS = [
   "./",
   "./index.html",

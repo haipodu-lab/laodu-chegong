@@ -573,9 +573,11 @@ function setTab(which) {
   document.getElementById("tab-mine").classList.toggle("on", which === "mine");
 }
 const CRAFT_FIELDS = {
-  diameter: ["直径", "mm"], depth: ["铣深", "mm"], innerRatio: ["内接比", ""],
+  diameter: ["直径", "mm"], innerRatio: ["内接比", ""],
   acrossFlats: ["对边，0 表示用直径", "mm"], sides: ["边数", ""], length: ["总长", "mm"],
   nose: ["鼻长", "mm"], tail: ["尾锥长", "mm"], baseDiameter: ["尾端直径", "mm"],
+  stepZ: ["Z轴每层进给量", "mm"], totalDepth: ["总切削深度", "mm"], safeZ: ["安全高度", "mm"],
+  feed: ["进给速度", "mm/min"], plunge: ["下刀进给", "mm/min"], spindle: ["主轴转速", "r/min"],
 };
 
 function craftEditor(id) {
@@ -584,12 +586,22 @@ function craftEditor(id) {
   if (!craft) { app.innerHTML = homeHTML(); setTab("home"); return; }
   const fields = Object.keys(craft.defaults).map((key) => {
     const meta = CRAFT_FIELDS[key] || [key, ""];
-    return field(key, meta[0], meta[1], String(craft.defaults[key]));
+    const shown = key === "stepZ" || key === "totalDepth" ? Number(craft.defaults[key]).toFixed(1) : String(craft.defaults[key]);
+    return field(key, meta[0], meta[1], shown);
   }).join("");
-  app.innerHTML = page("notes", craft.name, `<p><a class="btn sec" href="#/m/notes">返回图库</a></p><div class="split"><section class="card" id="inputs">${fields}</section><section class="card" id="view"></section></div>`, "车削程序 X 为直径，Z 从前端面往卡盘为负。铣削外形在 G17，深度从上表面往下。");
+  const styleBar = craft.kind === "mill"
+    ? `<div class="seg" id="progstyle"><button type="button" data-style="macro" class="on">宏程序</button><button type="button" data-style="plain">普通程序</button></div>`
+    : "";
+  app.innerHTML = page("notes", craft.name, `<p><a class="btn sec" href="#/m/notes">返回图库</a></p><div class="split"><section class="card" id="inputs">${fields}${styleBar}</section><section class="card" id="view"></section></div>`, craft.kind === "mill" ? "铣外形默认是 FANUC 用户宏，按每层进给量逐层下到总深。最后一层不够一层时只切到总深。普通程序把同样的层展开成 G01。" : "车削程序 X 为直径，Z 从前端面往卡盘为负。");
   bindFav("notes");
+  let style = "macro";
+  document.querySelectorAll("[data-style]").forEach((btn) => btn.addEventListener("click", () => {
+    style = btn.dataset.style;
+    document.querySelectorAll("[data-style]").forEach((item) => item.classList.toggle("on", item === btn));
+    paint();
+  }));
   const paint = () => {
-    const params = {};
+    const params = { style };
     for (const key of Object.keys(craft.defaults)) params[key] = Number(document.getElementById(key).value);
     const model = buildCraft(id, params);
     const view = document.getElementById("view");

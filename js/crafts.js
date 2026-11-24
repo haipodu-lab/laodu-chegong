@@ -386,10 +386,12 @@ export function polygonShape(diameter, sides, acrossFlats) {
   return { name: "多边形", kind: "mill", diameter: D, sides: n, segments, vertices: pts };
 }
 
+const millCut = { stepZ: 1, totalDepth: 5, safeZ: 5, feed: 120, plunge: 80, spindle: 3000 };
+
 export const CRAFTS = [
-  { id: "heart", name: "心形", kind: "mill", defaults: { diameter: 40, depth: 1 } },
-  { id: "star", name: "五角星", kind: "mill", defaults: { diameter: 40, innerRatio: 0.382, depth: 1 } },
-  { id: "polygon", name: "多边形", kind: "mill", defaults: { diameter: 40, acrossFlats: 0, sides: 6, depth: 1 } },
+  { id: "heart", name: "心形", kind: "mill", defaults: { diameter: 40, ...millCut } },
+  { id: "star", name: "五角星", kind: "mill", defaults: { diameter: 40, innerRatio: 0.382, ...millCut } },
+  { id: "polygon", name: "多边形", kind: "mill", defaults: { diameter: 40, acrossFlats: 0, sides: 6, ...millCut } },
   { id: "bullet1", name: "子弹1", kind: "lathe", defaults: { length: 48, diameter: 12, nose: 18 } },
   { id: "bullet2", name: "子弹2", kind: "lathe", defaults: { length: 56, diameter: 12, nose: 20, tail: 12, baseDiameter: 8 } },
   { id: "gourd1", name: "葫芦1", kind: "lathe", defaults: { length: 80, diameter: 36 } },
@@ -427,10 +429,38 @@ export function profilePoints(model) {
   return pts;
 }
 
-export function programFor(model, params) {
+export function layerDepths(total, step) {
+  if (!(total > 0) || !(step > 0)) return { error: "总切削深度和每层进给量都要大于 0。" };
+  if (step > total + 1e-9) return { error: "每层进给量不能大于总切削深度。" };
+  const depths = [];
+  let z = 0;
+  while (z < total - 1e-9 && depths.length < 100000) {
+    z = Math.min(total, z + step);
+    depths.push(Math.round(z * 1000) / 1000);
+  }
+  return { depths };
+}
+
+export function programFor(model, params = {}) {
   if (!model || model.error) return "";
   if (model.kind === "lathe") return latheProgram(model);
-  return millProgram(model, params.depth || 1);
+  const total = Number(params.totalDepth ?? params.depth ?? 5);
+  const step = Number(params.stepZ ?? total);
+  const layers = layerDepths(total, step);
+  if (layers.error) return `(${layers.error})`;
+  const cut = {
+    total, step,
+    safeZ: Number(params.safeZ ?? 5),
+    feed: Number(params.feed ?? 120),
+    plunge: Number(params.plunge ?? 80),
+    spindle: Number(params.spindle ?? 3000),
+    depths: layers.depths,
+  };
+  if (!(cut.safeZ >= 0) || !(cut.feed > 0) || !(cut.plunge > 0) || !(cut.spindle > 0)) {
+    return "(安全高度不能为负，进给和转速要大于 0。)";
+  }
+  if (params.style === "plain") return millPlain(model, params, cut);
+  return millMacro(model, params, cut);
 }
 
 function latheProgram(model) {
@@ -457,33 +487,155 @@ function latheProgram(model) {
   return lines.join("\n");
 }
 
-function millProgram(model, depth) {
-  const first = model.segments[0];
-  const ax = first.x0 * 0.82;
-  const ay = first.y0 * 0.82;
+function millPlain(model, params, cut) {
   const lines = [
-    `(${model.name} 铣外形)`,
-    `(包络直径 ${num(model.diameter)} 深度 ${num(Math.abs(depth))})`,
+    `(${model.name} 铣外形 分层)`,
+    `(总深 ${num(cut.total)} 每层 ${num(cut.step)} 安全高度 ${num(cut.safeZ)})`,
     "G21 G17 G90 G94",
-    "G00 Z5.",
+    `G00 Z${num(cut.safeZ)}`,
     "T01 M06",
-    "S3000 M03",
-    `G00 X${num(ax)} Y${num(ay)}`,
-    `G01 Z${num(-Math.abs(depth))} F80`,
+    `S${num(cut.spindle, 0)} M03`,
+  ];
+  for (const depth of cut.depths) {
+    lines.push(...layerBlock(model, params, `Z${num(-depth)}`, `F${num(cut.plunge, 0)}`, `F${num(cut.feed, 0)}`, false));
+    lines.push(`G00 Z${num(cut.safeZ)}`);
+  }
+  lines.push("M30");
+  return lines.join("\n");
+}
+
+function millMacro(model, params, cut) {
+  const lines = [
+    `(${model.name} 铣外形 用户宏)`,
+    "(#1 总切削深度 mm)",
+    "(#2 每层进给量 mm)",
+    "(#3 当前深度 mm，最后一层不足层深时取到总深)",
+    "(#4 安全高度 mm)",
+    "(#5 轮廓进给 mm/min)",
+    "(#6 下刀进给 mm/min)",
+    "(#7 主轴转速 r/min)",
+    ...macroShapeHeader(model, params),
+    `#1=${num(cut.total)}`,
+    `#2=${num(cut.step)}`,
+    "#3=0",
+    `#4=${num(cut.safeZ)}`,
+    `#5=${num(cut.feed, 0)}`,
+    `#6=${num(cut.plunge, 0)}`,
+    `#7=${num(cut.spindle, 0)}`,
+    "G21 G17 G90 G94",
+    "G00 Z#4",
+    "T01 M06",
+    "S#7 M03",
+    "WHILE[#3 LT #1] DO1",
+    "#3=#3+#2",
+    "IF[#3 GT #1] THEN #3=#1",
+    ...layerBlock(model, params, "Z-#3", "F#6", "F#5", true),
+    "G00 Z#4",
+    "END1",
+    "M30",
+  ];
+  return lines.join("\n");
+}
+
+function macroShapeHeader(model, params) {
+  if (model.name === "多边形") {
+    return [
+      "(#10 边数)",
+      "(#11 外接圆半径 mm，对边大于 0 时按对边换算)",
+      "(#12 起始角 deg，第一个顶点朝上)",
+      "(#13 每边转角 deg)",
+      "(#14 对边 mm，0 表示用直径)",
+      "(#18 包络直径 mm)",
+      "(#20 顶点序号)",
+      `#10=${Math.round(params.sides || model.sides || 6)}`,
+      `#18=${num(params.diameter || model.diameter)}`,
+      `#14=${num(params.acrossFlats || 0)}`,
+      "#11=#18/2",
+      "IF[#14 GT 0] THEN #11=[#14/2]/COS[180/#10]",
+      "#12=-90.",
+      "#13=360/#10",
+    ];
+  }
+  if (model.name === "五角星") {
+    return [
+      "(#11 外接圆半径 mm)",
+      "(#12 起始角 deg，一个尖朝上)",
+      "(#13 每点转角 deg)",
+      "(#15 内接半径 mm)",
+      "(#16 内接比)",
+      "(#20 顶点序号)",
+      "(#27 0 为外点，1 为内点)",
+      `#11=${num(model.diameter / 2)}`,
+      `#16=${num(params.innerRatio ?? 0.382)}`,
+      "#15=#11*#16",
+      "#12=-90.",
+      "#13=36.",
+    ];
+  }
+  return [
+    `(#8 包络直径 mm ${num(model.diameter)}，下面的圆弧坐标已按这个直径算好)`,
+  ];
+}
+
+function layerBlock(model, params, zWord, plungeFeed, contourFeed, macro) {
+  if (macro && model.name === "多边形") return polygonMacroLayer(zWord, plungeFeed, contourFeed);
+  if (macro && model.name === "五角星") return starMacroLayer(zWord, plungeFeed, contourFeed);
+  const first = model.segments[0];
+  const lines = [
+    `G00 X${num(first.x0 * 0.82)} Y${num(first.y0 * 0.82)}`,
+    `G01 ${zWord} ${plungeFeed}`,
     "G41 D01",
-    `G01 X${num(first.x0)} Y${num(first.y0)} F120`,
+    `G01 X${num(first.x0)} Y${num(first.y0)} ${contourFeed}`,
   ];
   for (const seg of model.segments) {
-    if (seg.type === "line") lines.push(`G01 X${num(seg.x1)} Y${num(seg.y1)} F120`);
+    if (seg.type === "line") lines.push(`G01 X${num(seg.x1)} Y${num(seg.y1)} ${contourFeed}`);
     else {
       const g = seg.ccw ? "G03" : "G02";
-      const i = seg.cx - seg.x0;
-      const j = seg.cy - seg.y0;
-      lines.push(`${g} X${num(seg.x1)} Y${num(seg.y1)} I${num(i)} J${num(j)} F120`);
+      lines.push(`${g} X${num(seg.x1)} Y${num(seg.y1)} I${num(seg.cx - seg.x0)} J${num(seg.cy - seg.y0)} ${contourFeed}`);
     }
   }
-  lines.push("G40", "G00 Z5.", "M30");
-  return lines.join("\n");
+  lines.push("G40");
+  return lines;
+}
+
+function polygonMacroLayer(zWord, plungeFeed, contourFeed) {
+  return [
+    "#30=#11*COS[#12]*0.82",
+    "#31=#11*SIN[#12]*0.82",
+    "G00 X#30 Y#31",
+    `G01 ${zWord} ${plungeFeed}`,
+    "G41 D01",
+    `G01 X[#11*COS[#12]] Y[#11*SIN[#12]] ${contourFeed}`,
+    "#20=1",
+    "WHILE[#20 LE #10] DO2",
+    "#21=#12+#20*#13",
+    `G01 X[#11*COS[#21]] Y[#11*SIN[#21]] ${contourFeed}`,
+    "#20=#20+1",
+    "END2",
+    "G40",
+  ];
+}
+
+function starMacroLayer(zWord, plungeFeed, contourFeed) {
+  return [
+    "#30=#11*COS[#12]*0.82",
+    "#31=#11*SIN[#12]*0.82",
+    "G00 X#30 Y#31",
+    `G01 ${zWord} ${plungeFeed}`,
+    "G41 D01",
+    `G01 X[#11*COS[#12]] Y[#11*SIN[#12]] ${contourFeed}`,
+    "#20=1",
+    "WHILE[#20 LE 10] DO2",
+    "#21=#12+#20*#13",
+    "#26=FIX[#20/2]",
+    "#27=#20-#26*2",
+    "IF[#27 EQ 0] THEN #28=#11",
+    "IF[#27 EQ 1] THEN #28=#15",
+    `G01 X[#28*COS[#21]] Y[#28*SIN[#21]] ${contourFeed}`,
+    "#20=#20+1",
+    "END2",
+    "G40",
+  ];
 }
 
 export function maxRadiusOf(model) {
