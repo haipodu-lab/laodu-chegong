@@ -1,6 +1,6 @@
 {
-  "name": "老杜车工",
-  "short_name": "老杜车工",
+  "name": "车铣助手",
+  "short_name": "车铣助手",
   "description": "离线车床与数控车工计算",
   "start_url": "./",
   "scope": "./",

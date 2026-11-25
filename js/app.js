@@ -72,7 +72,7 @@ function homeHTML() {
       ${icon(ICONS[id])}
       <span>${esc(title)}</span>
     </a>`).join("");
-  return `<header class="home-head"><h1>老杜车工</h1><p class="sub">离线车床计算</p></header><div class="home-grid">${tiles}</div>`;
+  return `<header class="home-head"><h1>车铣助手</h1><p class="sub">离线车床计算</p></header><div class="home-grid">${tiles}</div>`;
 }
 
 function mineHTML() {
@@ -81,7 +81,7 @@ function mineHTML() {
     ? saved.map(([id, title]) => `<a class="item" href="#/m/${id}"><b>${esc(title)}</b></a>`).join("")
     : `<p class="empty">在计算页右上角点星标，就会出现在这里。</p>`;
   return `<div class="page"><header class="page-head"><h1>我的</h1></header>
-    <section class="card"><h2 style="margin:0 0 6px">老杜车工</h2><p class="muted">版本 1.0.0 · 网页版</p><p>给车床和数控车工用的离线计算本。不登录，不联网，没有广告。</p></section>
+    <section class="card"><h2 style="margin:0 0 6px">车铣助手</h2><p class="muted">版本 1.0.0 · 网页版</p><p>给车床和数控车工用的离线计算本。不登录，不联网，没有广告。</p></section>
     <section class="card"><h2 style="margin:0 0 6px">使用前</h2><p>所有直径、牙高、公差和切削用量都是参考值。编程之前对照图纸、量具和机床说明书，首件必须实测。</p></section>
     <section class="card"><h2 style="margin:0 0 6px">收藏</h2>${list}</section>
     <section class="card"><a class="item" href="#/mine/notes"><b>我的工艺笔记</b><div class="muted">材料、刀具和转速记在这台设备上</div></a></section>
