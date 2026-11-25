@@ -1,4 +1,4 @@
-const CACHE = "laodu-chegong-v5";
+const CACHE = "laodu-chegong-v6";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const ASSETS = [
   "./js/calc.js",
   "./js/crafts.js",
   "./js/tools.js",
+  "./js/cycles.js",
   "./data/cutting.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

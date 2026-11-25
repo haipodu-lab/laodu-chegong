@@ -1,6 +1,7 @@
 import * as C from "./calc.js";
 import { CRAFTS, buildCraft, programFor, profilePoints, drawSegmentsSVG } from "./crafts.js";
-import { toolFace, toolIcon, toolNames } from "./tools.js";
+import { toolFace, toolIcon } from "./tools.js";
+import { CYCLE_GROUPS, cycleById, cycleDiagram, cycleProgram, defaultHoles, defaultValues } from "./cycles.js";
 
 const FAV_KEY = "laodu.favorites";
 const NOTE_KEY = "laodu.notes";
@@ -8,7 +9,7 @@ const MODULES = [
   ["arc", "圆弧接点"], ["thread", "各种螺纹"], ["macro", "宏程序"], ["angle", "角度计算"],
   ["tol", "公差等级"], ["across", "对角计算"], ["weight", "材料重量"], ["gcode", "常用代码"],
   ["threads", "螺纹对照表"], ["trig", "三角函数表"], ["misc", "其他计算"], ["notes", "工艺品"],
-  ["groove", "各种槽"], ["tri", "解三角形"], ["sim", "宏转G模拟"], ["lab", "切削参数"],
+  ["groove", "各种槽"], ["tri", "解三角形"], ["sim", "宏转G模拟"], ["hand", "手工编程"], ["lab", "切削参数"],
 ];
 const memory = {};
 let cutting = null;
@@ -58,10 +59,11 @@ function icon(name) {
     tri: '<path d="M5 19h14L12 5z"/>',
     sim: '<path d="M3 16c3-8 5 2 8-6s4 4 10-2"/>',
     lab: '<path d="M9 3h6M10 3v6L6 20h12l-4-11V3"/>',
+    hand: '<path d="M5 17V8l3-3 3 3v9M14 17V6l3-2 3 2v11"/>',
   };
   return `<span class="glyph"><svg viewBox="0 0 24 24">${paths[name] || paths.arc}</svg></span>`;
 }
-const ICONS = { arc: "arc", thread: "thread", macro: "macro", angle: "angle", tol: "tol", across: "hex", weight: "cube", gcode: "code", threads: "table", trig: "trig", misc: "misc", notes: "notes", groove: "groove", tri: "tri", sim: "sim", lab: "lab" };
+const ICONS = { arc: "arc", thread: "thread", macro: "macro", angle: "angle", tol: "tol", across: "hex", weight: "cube", gcode: "code", threads: "table", trig: "trig", misc: "misc", notes: "notes", groove: "groove", tri: "tri", sim: "sim", lab: "lab", hand: "hand" };
 
 function homeHTML() {
   const tiles = MODULES.map(([id, title]) => `
@@ -471,14 +473,12 @@ const screens = {
         catch { document.getElementById("labstatus").textContent = "用量表没有读出来。"; return; }
       }
       const data = cutting;
-      const names = toolNames(data.records);
       document.getElementById("labstatus").textContent = `共 ${data.records.length} 条，数控车 ${data.records.filter((r) => r.machine === "lathe").length}，加工中心 ${data.records.filter((r) => r.machine === "mill").length}。`;
-      document.getElementById("lab").innerHTML = `<div class="seg"><button data-m="all" class="on" type="button">全部</button><button data-m="lathe" type="button">数控车</button><button data-m="mill" type="button">加工中心</button></div><input class="block" id="q" placeholder="例如 45钢、麻花钻、立铣刀" style="width:100%;margin:8px 0"><div class="split"><label class="field"><span>材料</span><select id="mat"><option value="">全部</option>${data.materials.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select><em></em></label><label class="field"><span>工序</span><select id="op"><option value="">全部</option>${data.ops.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select><em></em></label></div><div class="chip-row" id="tools"><button class="chip on" data-tool="" type="button">全部刀具</button>${names.map((name) => { const sample = data.records.find((row) => toolFace(row).name === name); return `<button class="chip" data-tool="${esc(name)}" type="button">${toolIcon(toolFace(sample).family)}<span>${esc(name)}</span></button>`; }).join("")}</div><section class="card" id="compare"></section><div class="lab-layout"><section class="card list" id="list"></section><section class="card" id="detail"></section></div>`;
-      let machine = "all", toolName = "", selected = null, compared = [];
+      document.getElementById("lab").innerHTML = `<div class="seg"><button data-m="all" class="on" type="button">全部</button><button data-m="lathe" type="button">数控车</button><button data-m="mill" type="button">加工中心</button></div><input class="block" id="q" placeholder="例如 45钢、麻花钻、立铣刀" style="width:100%;margin:8px 0"><div class="split"><label class="field"><span>材料</span><select id="mat"><option value="">全部</option>${data.materials.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select><em></em></label><label class="field"><span>工序</span><select id="op"><option value="">全部</option>${data.ops.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select><em></em></label></div><section class="card" id="compare"></section><div class="lab-layout"><section class="card list" id="list"></section><section class="card" id="detail"></section></div>`;
+      let machine = "all", selected = null, compared = [];
       const go = () => {
         const q = document.getElementById("q").value.trim().toLowerCase();
         let rows = C.filterRecords(data.records, { machine, op: document.getElementById("op").value, mat: document.getElementById("mat").value, tool: "", q: "" }, data.materials, data.ops);
-        if (toolName) rows = rows.filter((row) => toolFace(row).name === toolName);
         if (q) rows = rows.filter((row) => {
           const face = toolFace(row);
           return [matName(row.mat), opName(row.op), face.name, face.suffix, row.tool, row.notes, row.source].join(" ").toLowerCase().includes(q);
@@ -545,7 +545,6 @@ const screens = {
         recalc();
       };
       document.querySelectorAll("[data-m]").forEach((btn) => btn.addEventListener("click", () => { machine = btn.dataset.m; document.querySelectorAll("[data-m]").forEach((b) => b.classList.toggle("on", b === btn)); go(); }));
-      document.querySelectorAll("[data-tool]").forEach((btn) => btn.addEventListener("click", () => { toolName = btn.dataset.tool; document.querySelectorAll("[data-tool]").forEach((b) => b.classList.toggle("on", b === btn)); go(); }));
       ["q", "mat", "op"].forEach((id) => document.getElementById(id).addEventListener("input", go));
       go();
     },
@@ -641,12 +640,118 @@ function bindNotes() {
   render();
 }
 
+const HAND_NOTE = "上机前先空运行，再单段核对。车床按直径编程，X 是直径。G71、G72 里的 N 段只是精加工轮廓示例，要改成图纸形状。车床 G76 的 X 是螺纹终点直径。加工中心攻丝在 G94 下 F＝n×P。";
+
+function handState() {
+  if (!memory.hand) memory.hand = { dialect: "fanuc", values: {}, holes: {}, active: "" };
+  return memory.hand;
+}
+
+function handList() {
+  const state = handState();
+  const columns = CYCLE_GROUPS.map((group) => `<section class="card"><h2 style="margin:0 0 8px">${esc(group.title)}</h2>${group.sections.map((section) => `<h3 class="muted" style="margin:10px 0 4px">${esc(section.title)}</h3>${section.ids.map((id) => {
+    const item = cycleById(id);
+    return `<a class="cycle-link" href="#/m/hand/${id}"><b>${esc(item.code)}</b><span>${esc(item.title)}</span></a>`;
+  }).join("")}`).join("")}</section>`).join("");
+  document.getElementById("app").innerHTML = page("hand", "手工编程", `<div class="seg">${dialectButtons(state.dialect)}</div><div class="hand-grid">${columns}</div>`, "默认 FANUC 系统 A。华中写法不同的循环按华中常见格式，相同的用同一段并在程序里注明。");
+  bindFav("hand");
+  bindDialect(state, handList);
+}
+
+function handEditor(id) {
+  const item = cycleById(id);
+  const app = document.getElementById("app");
+  if (!item) { handList(); return; }
+  const state = handState();
+  if (!state.values[id]) state.values[id] = defaultValues(item);
+  if (item.holes && !state.holes[id]) state.holes[id] = defaultHoles();
+  app.innerHTML = page("hand", `${item.code} ${item.title}`, `<p><a class="btn sec" href="#/m/hand">返回清单</a></p><div class="seg">${dialectButtons(state.dialect)}</div><div class="cycle-layout"><section class="card" id="fig"></section><section class="card" id="inputs"></section><section class="card" id="out"><p class="warn" id="err"></p><pre class="code" id="prog"></pre><button class="btn" id="copy" type="button">复制程序</button></section></div>`, item.formula ? "这是编程时用的换算，不是固定循环。算完再抄进程序。" : HAND_NOTE);
+  bindFav("hand");
+  bindDialect(state, () => handEditor(id));
+  const inputs = document.getElementById("inputs");
+  const paintInputs = () => {
+    const values = state.values[id];
+    inputs.innerHTML = item.fields.map((field) => cycleInput(field, values[field.id] ?? field.def)).join("")
+      + (item.holes ? holeEditor(state.holes[id]) : "");
+    inputs.querySelectorAll("input, select").forEach((el) => {
+      el.addEventListener("input", () => { readHand(item, state); refreshHand(item, state); });
+      el.addEventListener("focus", () => { state.active = el.id; refreshHand(item, state); });
+    });
+    document.getElementById("addhole")?.addEventListener("click", () => {
+      readHand(item, state);
+      state.holes[id].push({ x: "0", y: "0" });
+      paintInputs();
+      refreshHand(item, state);
+    });
+    document.getElementById("delhole")?.addEventListener("click", () => {
+      readHand(item, state);
+      if (state.holes[id].length > 1) state.holes[id].pop();
+      paintInputs();
+      refreshHand(item, state);
+    });
+  };
+  paintInputs();
+  refreshHand(item, state);
+  document.getElementById("copy").onclick = () => copyText(document.getElementById("prog").textContent);
+}
+
+function cycleInput(spec, value) {
+  if (spec.type === "select") {
+    return `<label class="field"><span>${esc(spec.label)}</span><select id="${esc(spec.id)}">${spec.options.map(([val, name]) => `<option value="${esc(val)}"${val === value ? " selected" : ""}>${esc(name)}</option>`).join("")}</select><em></em></label>`;
+  }
+  return field(spec.id, spec.label, spec.unit, value);
+}
+function holeEditor(holes) {
+  return `<h3 style="margin:8px 0 0">孔位</h3>${holes.map((hole, index) => `<div class="split">${field(`hx${index}`, `孔${index + 1} X`, "mm", hole.x)}${field(`hy${index}`, `孔${index + 1} Y`, "mm", hole.y)}</div>`).join("")}<p>${holes.length > 1 ? `<button class="btn sec" id="delhole" type="button">去掉最后一孔</button> ` : ""}<button class="btn sec" id="addhole" type="button">加一个孔</button></p>`;
+}
+function readHand(item, state) {
+  const values = {};
+  for (const field of item.fields) values[field.id] = document.getElementById(field.id)?.value ?? field.def;
+  state.values[item.id] = values;
+  if (item.holes) {
+    const holes = [];
+    for (let index = 0; document.getElementById(`hx${index}`); index++) {
+      holes.push({ x: document.getElementById(`hx${index}`).value, y: document.getElementById(`hy${index}`).value });
+    }
+    state.holes[item.id] = holes;
+  }
+}
+function refreshHand(item, state) {
+  const fig = document.getElementById("fig");
+  const err = document.getElementById("err");
+  const prog = document.getElementById("prog");
+  try {
+    const holes = state.holes[item.id] || defaultHoles();
+    if (fig) fig.innerHTML = cycleDiagram(item, state.values[item.id] || {}, state.active || "", holes);
+    const built = cycleProgram(item, state.values[item.id] || {}, state.dialect, holes);
+    if (err) err.textContent = built.error || "";
+    if (prog) prog.textContent = built.program || "";
+  } catch (error) {
+    if (err) err.textContent = error && error.message ? error.message : "程序没有生成。";
+  }
+}
+function dialectButtons(dialect) {
+  return `<button type="button" data-dialect="fanuc" class="${dialect === "fanuc" ? "on" : ""}">FANUC</button><button type="button" data-dialect="huazhong" class="${dialect === "huazhong" ? "on" : ""}">华中</button>`;
+}
+function bindDialect(state, redraw) {
+  document.querySelectorAll("[data-dialect]").forEach((btn) => btn.addEventListener("click", () => {
+    state.dialect = btn.dataset.dialect;
+    redraw();
+  }));
+}
+
 function route() {
   const hash = (location.hash || "#/").replace(/^#/, "");
   const app = document.getElementById("app");
   if (hash === "/mine/notes") { app.innerHTML = notesPage(); bindNotes(); setTab("mine"); return; }
   if (hash === "/mine") { app.innerHTML = mineHTML(); setTab("mine"); return; }
   if (hash.startsWith("/m/notes/")) { craftEditor(decodeURIComponent(hash.slice("/m/notes/".length))); setTab("home"); return; }
+  if (hash === "/m/hand" || hash.startsWith("/m/hand/")) {
+    if (hash === "/m/hand") handList();
+    else handEditor(decodeURIComponent(hash.slice("/m/hand/".length)));
+    setTab("home");
+    return;
+  }
   if (hash.startsWith("/m/")) {
     const id = hash.slice(3);
     const screen = screens[id];

@@ -125,6 +125,17 @@ table.pts { width: 100%; border-collapse: collapse; font-variant-numeric: tabula
 table.pts th, table.pts td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--line); }
 table.pts th:first-child, table.pts td:first-child { text-align: left; }
 .cmp { margin-top: 6px; }
+.hand-grid { display: grid; gap: 12px; }
+.cycle-link { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.cycle-link b { min-width: 3.2em; }
+.cycle-layout { display: grid; gap: 12px; }
+.cycle-svg { width: 100%; height: auto; background: #fff; border-radius: 12px; display: block; }
+#compare:empty { display: none; margin: 0; padding: 0; }
+.field:focus-within { background: var(--tint); border-radius: 10px; }
+@media (min-width: 800px) {
+  .hand-grid, .cycle-layout { grid-template-columns: 1fr 1fr; }
+  #out { grid-column: 1 / -1; }
+}
 .sketch { width: 100%; height: 180px; background: #f7f4ee; border-radius: 12px; display: block; }
 .warn { color: var(--rust); font-size: 13px; }
 @media (min-width: 700px) {
